@@ -1,0 +1,11 @@
+services:
+  similarr:
+    image: plexeum/similarr:latest
+    container_name: similarr
+    restart: unless-stopped
+    volumes:
+      - ./config/.env:/app/config/.env:ro
+      - ./logs:/app/logs
+    environment:
+      - TZ=America/New_York
+      - CRON_SCHEDULE=0 2 * * *
