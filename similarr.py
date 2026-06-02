@@ -88,6 +88,9 @@ class Config:
     skip_if_already_watched: bool
     hide_future_releases: bool
     
+    # Language Filter
+    language_filter: Optional[str]
+    
     # Radarr Add Behavior
     auto_search_after_add: bool
     
@@ -138,6 +141,14 @@ def get_config() -> Config:
     # Radarr quality profile - optional
     quality_profile_id = os.getenv("RADARR_QUALITY_PROFILE_ID")
     radarr_quality_profile_id = int(quality_profile_id) if quality_profile_id else None
+
+    # Language filter - optional
+    language_filter = os.getenv("LANGUAGE_FILTER")
+    if language_filter and len(language_filter) not in [2, 3]:
+        logger.warning(f"LANGUAGE_FILTER '{language_filter}' doesn't look like a valid ISO code")
+        language_filter = None
+    elif language_filter:
+        language_filter = language_filter.lower().strip()
     
     config = Config(
         plex_url=config_dict["plex_url"],
@@ -161,6 +172,7 @@ def get_config() -> Config:
         min_vote_count=int(os.getenv("MIN_VOTE_COUNT", "100")),
         skip_if_already_watched=os.getenv("SKIP_IF_ALREADY_WATCHED", "true").lower() == "true",
         hide_future_releases=os.getenv("HIDE_FUTURE_RELEASES", "true").lower() == "true",
+        language_filter=language_filter,
         auto_search_after_add=os.getenv("AUTO_SEARCH_AFTER_ADD", "false").lower() == "true",
         dry_run=os.getenv("DRY_RUN", "false").lower() == "true"
     )
@@ -566,7 +578,8 @@ class TMDBClient:
                 "year": result.get("release_date", "")[:4] if result.get("release_date") else None,
                 "rating": result.get("vote_average", 0),
                 "votes": result.get("vote_count", 0),
-                "release_date": result.get("release_date")
+                "release_date": result.get("release_date"),
+                "original_language": result.get("original_language", "")
             }
         return None
 
@@ -752,6 +765,7 @@ class SimilarityEngine:
                         "rating": details.get("rating", 0),
                         "votes": details.get("votes", 0),
                         "release_date": details.get("release_date"),
+                        "original_language": details.get("original_language", ""),
                         "source": "tmdb",
                         "rationale": f"TMDB similar to {source_title}"
                     }
@@ -809,6 +823,13 @@ class SimilarityEngine:
                 release_date = candidate["release_date"]
                 if release_date and release_date > datetime.now().strftime("%Y-%m-%d"):
                     logger.debug(f"Skipping {candidate['title']}: future release {release_date}")
+                    continue
+
+            # Language filter
+            if self.config.language_filter:
+                original_language = candidate.get("original_language", "").lower()
+                if original_language != self.config.language_filter:
+                    logger.debug(f"Skipping {candidate['title']}: language {original_language} != {self.config.language_filter}")
                     continue
             
             filtered.append(candidate)
