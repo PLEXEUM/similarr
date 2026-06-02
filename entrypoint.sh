@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Create config directory if it doesn't exist
-mkdir -p /app/config
-
 # Create logs directory if it doesn't exist
 mkdir -p /app/logs
 
@@ -11,12 +8,12 @@ if [ ! -f /app/config/.env ]; then
     echo "=========================================="
     echo "No config found. Creating from example..."
     echo "=========================================="
+    mkdir -p /app/config
     cp /app/.env.example /app/config/.env
     echo "Config created at: /app/config/.env"
     echo ""
     echo "IMPORTANT: Please edit the config file with your settings:"
-    echo "  docker exec -it similarr vi /app/config/.env"
-    echo "  or edit ./config/.env on your host machine"
+    echo "  Edit ./config/.env on your host machine"
     echo ""
     echo "Then restart the container:"
     echo "  docker compose restart"
