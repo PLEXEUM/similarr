@@ -6,6 +6,24 @@ mkdir -p /app/config
 # Create logs directory if it doesn't exist
 mkdir -p /app/logs
 
+# Copy example config if .env doesn't exist
+if [ ! -f /app/config/.env ]; then
+    echo "=========================================="
+    echo "No config found. Creating from example..."
+    echo "=========================================="
+    cp /app/.env.example /app/config/.env
+    echo "Config created at: /app/config/.env"
+    echo ""
+    echo "IMPORTANT: Please edit the config file with your settings:"
+    echo "  docker exec -it similarr vi /app/config/.env"
+    echo "  or edit ./config/.env on your host machine"
+    echo ""
+    echo "Then restart the container:"
+    echo "  docker compose restart"
+    echo "=========================================="
+    exit 0
+fi
+
 # Log rotation - keep last 1000 lines if file exceeds 10MB
 LOG_FILE="/app/logs/similarr.log"
 if [ -f "$LOG_FILE" ] && [ $(stat -c%s "$LOG_FILE") -gt 10485760 ]; then
@@ -17,7 +35,6 @@ fi
 SCHEDULE="${CRON_SCHEDULE:-0 2 * * *}"
 
 # Add cron job that logs to both file and stdout
-# Use full path to python (/usr/local/bin/python) since cron has limited PATH
 echo "$SCHEDULE cd /app && /usr/local/bin/python /app/similarr.py 2>&1 | tee -a /app/logs/similarr.log" > /etc/cron.d/similarr-cron
 chmod 0644 /etc/cron.d/similarr-cron
 crontab /etc/cron.d/similarr-cron
@@ -25,7 +42,7 @@ crontab /etc/cron.d/similarr-cron
 # Start cron in background
 cron
 
-# Ensure log file exists and tail it to stdout (so docker logs shows output)
+# Ensure log file exists and tail it to stdout
 touch /app/logs/similarr.log
 echo "similarr container started - cron schedule: $SCHEDULE"
 echo "Log file: /app/logs/similarr.log"
@@ -33,5 +50,5 @@ echo "View logs with: docker logs similarr"
 echo "Manual run: docker exec -it similarr python /app/similarr.py"
 echo ""
 
-# Tail the log file to stdout so docker logs shows real-time output
+# Tail the log file to stdout
 tail -f /app/logs/similarr.log
