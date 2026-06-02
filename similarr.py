@@ -90,6 +90,9 @@ class Config:
     
     # Language Filter
     language_filter: Optional[str]
+
+    # Year Filter
+    min_year: int
     
     # Radarr Add Behavior
     auto_search_after_add: bool
@@ -149,6 +152,9 @@ def get_config() -> Config:
         language_filter = None
     elif language_filter:
         language_filter = language_filter.lower().strip()
+
+    # Year filter - optional
+    min_year = int(os.getenv("MIN_YEAR", "0"))
     
     config = Config(
         plex_url=config_dict["plex_url"],
@@ -173,6 +179,7 @@ def get_config() -> Config:
         skip_if_already_watched=os.getenv("SKIP_IF_ALREADY_WATCHED", "true").lower() == "true",
         hide_future_releases=os.getenv("HIDE_FUTURE_RELEASES", "true").lower() == "true",
         language_filter=language_filter,
+        min_year=min_year,
         auto_search_after_add=os.getenv("AUTO_SEARCH_AFTER_ADD", "false").lower() == "true",
         dry_run=os.getenv("DRY_RUN", "false").lower() == "true"
     )
@@ -830,6 +837,13 @@ class SimilarityEngine:
                 original_language = candidate.get("original_language", "").lower()
                 if original_language != self.config.language_filter:
                     logger.debug(f"Skipping {candidate['title']}: language {original_language} != {self.config.language_filter}")
+                    continue
+
+            # Year filter
+            if self.config.min_year > 0:
+                movie_year = candidate.get("year")
+                if movie_year and int(movie_year) < self.config.min_year:
+                    logger.debug(f"Skipping {candidate['title']}: year {movie_year} < {self.config.min_year}")
                     continue
             
             filtered.append(candidate)
