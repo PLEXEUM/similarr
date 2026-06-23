@@ -594,7 +594,8 @@ class TMDBClient:
                 "rating": result.get("vote_average", 0),
                 "votes": result.get("vote_count", 0),
                 "release_date": result.get("release_date"),
-                "original_language": result.get("original_language", "")
+                "original_language": result.get("original_language", ""),
+                "belongs_to_collection": result.get("belongs_to_collection")  # <-- ADD THIS LINE
             }
         return None
 
