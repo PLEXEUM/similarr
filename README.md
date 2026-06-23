@@ -109,6 +109,15 @@ Or view the log file: `logs/similarr.log`
 | `MIN_VOTE_COUNT` | Minimum votes - skip low confidence (default: 100) |
 | `SKIP_IF_ALREADY_WATCHED` | Skip movies already watched on Plex (default: true) |
 | `HIDE_FUTURE_RELEASES` | Skip unreleased movies (default: true) |
+| `ONLY_SOLO_MOVIES` | Only add movies that are NOT part of a franchise/collection (default: false) |
+
+### Solo Movies Only
+
+When `ONLY_SOLO_MOVIES=true`, Similarr will only add movies that are **not** part of any TMDB collection/franchise. This means sequels, prequels, spin-offs, and franchise films (like Marvel, DC, Star Wars, etc.) will be skipped.
+
+**Example:** If you watch "The Dark Knight" as a source movie, TMDB might suggest "Batman Begins" and "The Dark Knight Rises" as similar movies. With `ONLY_SOLO_MOVIES=true`, both of these would be skipped because they're part of the "Batman Collection". Instead, Similarr would only add standalone films like "The Departed" or "Heat" that aren't part of any franchise.
+
+This helps you discover more unique, standalone films and prevents adding entire movie franchises from a single watched film.
 
 ### Radarr Add Behavior
 
@@ -230,6 +239,12 @@ Log rotation: Keeps last 1000 lines when file exceeds 10MB.
 - Check if similar movies already exist in Radarr
 - Check if similar movies pass rating/vote filters
 - Run with `LOG_LEVEL=DEBUG` to see detailed filtering
+
+**Movies in collections are being skipped**
+
+- Check if `ONLY_SOLO_MOVIES=true` in your `.env` file
+- This is intentional - it only adds standalone movies not part of franchises
+- To add franchise/collection movies, set `ONLY_SOLO_MOVIES=false`
 
 ---
 

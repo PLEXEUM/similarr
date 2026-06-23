@@ -93,6 +93,9 @@ class Config:
 
     # Year Filter
     min_year: int
+
+    # Collection Filter
+    only_solo_movies: bool
     
     # Radarr Add Behavior
     auto_search_after_add: bool
@@ -155,6 +158,9 @@ def get_config() -> Config:
 
     # Year filter - optional
     min_year = int(os.getenv("MIN_YEAR", "0"))
+
+    # Collection filter - optional
+    only_solo_movies = os.getenv("ONLY_SOLO_MOVIES", "false").lower() == "true"
     
     config = Config(
         plex_url=config_dict["plex_url"],
@@ -180,6 +186,7 @@ def get_config() -> Config:
         hide_future_releases=os.getenv("HIDE_FUTURE_RELEASES", "true").lower() == "true",
         language_filter=language_filter,
         min_year=min_year,
+        only_solo_movies=only_solo_movies,
         auto_search_after_add=os.getenv("AUTO_SEARCH_AFTER_ADD", "false").lower() == "true",
         dry_run=os.getenv("DRY_RUN", "false").lower() == "true"
     )
@@ -198,6 +205,7 @@ def get_config() -> Config:
     logger.info(f"Max additions per run: {config.max_additions_per_run}")
     logger.info(f"Min TMDB rating: {config.min_tmdb_rating}")
     logger.info(f"Min vote count: {config.min_vote_count}")
+    logger.info(f"Only solo movies: {config.only_solo_movies}")
     logger.info(f"Dry run: {config.dry_run}")
     
     return config
@@ -743,6 +751,7 @@ class SimilarityEngine:
         self.tmdb = tmdb_client
         self.llm = llm_client
         self.config = config
+        self.skipped_collection_count = 0  # Add this line
     
     async def find_similar(self, source_movie: Dict) -> List[Dict]:
         """Find similar movies using configured mode."""
@@ -773,6 +782,7 @@ class SimilarityEngine:
                         "votes": details.get("votes", 0),
                         "release_date": details.get("release_date"),
                         "original_language": details.get("original_language", ""),
+                        "belongs_to_collection": details.get("belongs_to_collection"),
                         "source": "tmdb",
                         "rationale": f"TMDB similar to {source_title}"
                     }
@@ -808,6 +818,7 @@ class SimilarityEngine:
                                 "rating": details.get("rating", 0),
                                 "votes": details.get("votes", 0),
                                 "release_date": details.get("release_date"),
+                                "belongs_to_collection": details.get("belongs_to_collection"),
                                 "source": "llm",
                                 "rationale": rationale
                             }
@@ -844,6 +855,15 @@ class SimilarityEngine:
                 movie_year = candidate.get("year")
                 if movie_year and int(movie_year) < self.config.min_year:
                     logger.debug(f"Skipping {candidate['title']}: year {movie_year} < {self.config.min_year}")
+                    continue
+            
+            # Collection filter - only add movies NOT in a collection
+            if self.config.only_solo_movies:
+                belongs_to_collection = candidate.get("belongs_to_collection")
+                if belongs_to_collection:
+                    collection_name = belongs_to_collection.get("name", "Unknown Collection")
+                    logger.debug(f"Skipping {candidate['title']}: belongs to collection '{collection_name}'")
+                    self.skipped_collection_count += 1  # <-- ADD THIS LINE
                     continue
             
             filtered.append(candidate)
@@ -942,6 +962,7 @@ async def main():
     all_candidates = []
     sources_processed = 0
     total_added = 0
+    skipped_collection = 0
     
     for source in recently_played:
         # Check if we've hit the max additions limit
@@ -1065,7 +1086,8 @@ async def main():
         "summary": {
             "sources_processed": sources_processed,
             "total_added": total_added,
-            "total_skipped_limit": max(0, len(recently_played) - sources_processed)
+            "total_skipped_limit": max(0, len(recently_played) - sources_processed),
+            "skipped_due_to_collection": engine.skipped_collection_count
         }
     }
     
@@ -1082,11 +1104,15 @@ async def main():
         logger.info("Similarr Complete (DRY RUN)")
         logger.info(f"  Source movies processed: {sources_processed}")
         logger.info(f"  Movies that would be added: {total_added}")
+        if config.only_solo_movies:
+            logger.info(f"  Movies skipped (in collections): {engine.skipped_collection_count}")
         logger.info(f"  Set DRY_RUN=false to actually add them")
     else:
         logger.info("Similarr Complete")
         logger.info(f"  Source movies processed: {sources_processed}")
         logger.info(f"  Movies added to Radarr: {total_added}")
+        if config.only_solo_movies:
+            logger.info(f"  Movies skipped (in collections): {engine.skipped_collection_count}")
         logger.info(f"  Max additions per run: {config.max_additions_per_run}")
     logger.info("=" * 50)
 
