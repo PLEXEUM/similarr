@@ -9,3 +9,5 @@ services:
     environment:
       - TZ=America/New_York
       - CRON_SCHEDULE=0 2 * * *
+      # For runtime filter, set MIN_RUNTIME=60 in your .env file
+      # to skip movies under 60 minutes (shorts, specials, etc.)

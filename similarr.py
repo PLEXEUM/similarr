@@ -94,6 +94,9 @@ class Config:
     # Year Filter
     min_year: int
 
+    # Runtime Filter
+    min_runtime: int
+
     # Collection Filter
     only_solo_movies: bool
     
@@ -159,6 +162,9 @@ def get_config() -> Config:
     # Year filter - optional
     min_year = int(os.getenv("MIN_YEAR", "0"))
 
+    # Runtime filter - optional
+    min_runtime = int(os.getenv("MIN_RUNTIME", "0"))
+
     # Collection filter - optional
     only_solo_movies = os.getenv("ONLY_SOLO_MOVIES", "false").lower() == "true"
     
@@ -186,6 +192,7 @@ def get_config() -> Config:
         hide_future_releases=os.getenv("HIDE_FUTURE_RELEASES", "true").lower() == "true",
         language_filter=language_filter,
         min_year=min_year,
+        min_runtime=min_runtime,
         only_solo_movies=only_solo_movies,
         auto_search_after_add=os.getenv("AUTO_SEARCH_AFTER_ADD", "false").lower() == "true",
         dry_run=os.getenv("DRY_RUN", "false").lower() == "true"
@@ -206,6 +213,10 @@ def get_config() -> Config:
     logger.info(f"Min TMDB rating: {config.min_tmdb_rating}")
     logger.info(f"Min vote count: {config.min_vote_count}")
     logger.info(f"Only solo movies: {config.only_solo_movies}")
+    if config.min_runtime > 0:
+        logger.info(f"Min runtime: {config.min_runtime} minutes (movies under this will be skipped)")
+    else:
+        logger.info(f"Min runtime: disabled (0)")
     logger.info(f"Dry run: {config.dry_run}")
     
     return config
@@ -595,6 +606,7 @@ class TMDBClient:
                 "votes": result.get("vote_count", 0),
                 "release_date": result.get("release_date"),
                 "original_language": result.get("original_language", ""),
+                "runtime": result.get("runtime"),
                 "belongs_to_collection": result.get("belongs_to_collection")  # <-- ADD THIS LINE
             }
         return None
@@ -783,6 +795,7 @@ class SimilarityEngine:
                         "votes": details.get("votes", 0),
                         "release_date": details.get("release_date"),
                         "original_language": details.get("original_language", ""),
+                        "runtime": details.get("runtime"),
                         "belongs_to_collection": details.get("belongs_to_collection"),
                         "source": "tmdb",
                         "rationale": f"TMDB similar to {source_title}"
@@ -819,6 +832,7 @@ class SimilarityEngine:
                                 "rating": details.get("rating", 0),
                                 "votes": details.get("votes", 0),
                                 "release_date": details.get("release_date"),
+                                "runtime": details.get("runtime"),
                                 "belongs_to_collection": details.get("belongs_to_collection"),
                                 "source": "llm",
                                 "rationale": rationale
@@ -858,6 +872,20 @@ class SimilarityEngine:
                     logger.debug(f"Skipping {candidate['title']}: year {movie_year} < {self.config.min_year}")
                     continue
             
+            # Runtime filter
+            if self.config.min_runtime > 0:
+                # Runtime is in the candidate dict from TMDB details
+                runtime = candidate.get("runtime")
+                if runtime:
+                    if runtime < self.config.min_runtime:
+                        logger.debug(f"Skipping {candidate['title']}: runtime {runtime}min < {self.config.min_runtime}min")
+                        continue
+                else:
+                    # If runtime is missing, we could either skip or allow
+                    # Let's skip if runtime is missing and filter is enabled (safe approach)
+                    logger.debug(f"Skipping {candidate['title']}: runtime data missing")
+                    continue
+
             # Collection filter - only add movies NOT in a collection
             if self.config.only_solo_movies:
                 belongs_to_collection = candidate.get("belongs_to_collection")
