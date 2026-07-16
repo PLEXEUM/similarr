@@ -545,21 +545,42 @@ class TMDBClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://api.themoviedb.org/3"
+        self.semaphore = asyncio.Semaphore(5) 
     
-    async def _request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
-        """Make request to TMDB API."""
+    async def _request(self, endpoint: str, params: Dict = None, retries: int = 3) -> Optional[Dict]:
+        """Make request to TMDB API with retries and rate limiting."""
         url = f"{self.base_url}{endpoint}"
         all_params = {"api_key": self.api_key}
         if params:
             all_params.update(params)
         
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(url, params=all_params)
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"TMDB request failed for {endpoint}: {e}")
+        async with self.semaphore:
+            for attempt in range(retries):
+                try:
+                    async with httpx.AsyncClient(timeout=45) as client:
+                        response = await client.get(url, params=all_params)
+                        response.raise_for_status()
+                        # Small delay between successful requests to be nice to the API
+                        await asyncio.sleep(0.3)
+                        return response.json()
+                except httpx.TimeoutException:
+                    wait = 2 ** attempt
+                    logger.warning(f"TMDB timeout for {endpoint}, retry {attempt+1}/{retries} in {wait}s")
+                    await asyncio.sleep(wait)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429:
+                        wait = 5 * (2 ** attempt)
+                        logger.warning(f"TMDB rate limit (429) for {endpoint}, retry {attempt+1}/{retries} in {wait}s")
+                        await asyncio.sleep(wait)
+                    else:
+                        logger.error(f"TMDB HTTP {e.response.status_code} for {endpoint}")
+                        return None
+                except Exception as e:
+                    logger.error(f"TMDB request failed for {endpoint}: {e}")
+                    await asyncio.sleep(1)
+                    return None
+            
+            logger.error(f"TMDB request failed for {endpoint} after {retries} attempts")
             return None
     
     async def test_connection(self) -> Tuple[bool, str]:
@@ -840,36 +861,66 @@ class SimilarityEngine:
         
         # Step 3: Apply filters
         filtered = []
+        skipped_count = 0
         for candidate in candidates.values():
             # Rating filter
             if candidate["rating"] < self.config.min_tmdb_rating:
-                logger.debug(f"Skipping {candidate['title']}: rating {candidate['rating']} < {self.config.min_tmdb_rating}")
+                logger.debug(f"  Skipping {candidate['title']}: rating {candidate['rating']} < {self.config.min_tmdb_rating}")
+                skipped_count += 1
                 continue
             
             # Vote count filter
             if candidate["votes"] < self.config.min_vote_count:
-                logger.debug(f"Skipping {candidate['title']}: votes {candidate['votes']} < {self.config.min_vote_count}")
+                logger.debug(f"  Skipping {candidate['title']}: votes {candidate['votes']} < {self.config.min_vote_count}")
+                skipped_count += 1
                 continue
             
             # Future releases filter
             if self.config.hide_future_releases and candidate.get("release_date"):
                 release_date = candidate["release_date"]
                 if release_date and release_date > datetime.now().strftime("%Y-%m-%d"):
-                    logger.debug(f"Skipping {candidate['title']}: future release {release_date}")
+                    logger.debug(f"  Skipping {candidate['title']}: future release {release_date}")
+                    skipped_count += 1
                     continue
 
             # Language filter
             if self.config.language_filter:
                 original_language = candidate.get("original_language", "").lower()
                 if original_language != self.config.language_filter:
-                    logger.debug(f"Skipping {candidate['title']}: language {original_language} != {self.config.language_filter}")
+                    logger.debug(f"  Skipping {candidate['title']}: language {original_language} != {self.config.language_filter}")
+                    skipped_count += 1
                     continue
 
             # Year filter
             if self.config.min_year > 0:
                 movie_year = candidate.get("year")
                 if movie_year and int(movie_year) < self.config.min_year:
-                    logger.debug(f"Skipping {candidate['title']}: year {movie_year} < {self.config.min_year}")
+                    logger.debug(f"  Skipping {candidate['title']}: year {movie_year} < {self.config.min_year}")
+                    skipped_count += 1
+                    continue
+            
+            # Runtime filter
+            if self.config.min_runtime > 0:
+                # Runtime is in the candidate dict from TMDB details
+                runtime = candidate.get("runtime")
+                if runtime:
+                    if runtime < self.config.min_runtime:
+                        logger.debug(f"  Skipping {candidate['title']}: runtime {runtime}min < {self.config.min_runtime}min")
+                        skipped_count += 1
+                        continue
+                else:
+                    logger.debug(f"  Skipping {candidate['title']}: runtime data missing")
+                    skipped_count += 1
+                    continue
+
+            # Collection filter - only add movies NOT in a collection
+            if self.config.only_solo_movies:
+                belongs_to_collection = candidate.get("belongs_to_collection")
+                if belongs_to_collection:
+                    collection_name = belongs_to_collection.get("name", "Unknown Collection")
+                    logger.debug(f"  Skipping {candidate['title']}: belongs to collection '{collection_name}'")
+                    self.skipped_collection_count += 1
+                    skipped_count += 1
                     continue
             
             # Runtime filter
@@ -899,6 +950,21 @@ class SimilarityEngine:
         
         # Sort by rating (highest first), TMDB results prioritized over LLM for same rating
         filtered.sort(key=lambda x: (x["rating"], x["source"] == "tmdb"), reverse=True)
+        
+        # Log detailed results
+        if filtered:
+            logger.info(f"Similar movies found for '{source_title}':")
+            for i, candidate in enumerate(filtered[:10], 1):
+                source_label = "TMDB" if candidate["source"] == "tmdb" else "LLM"
+                collection = " (collection)" if candidate.get("belongs_to_collection") else ""
+                logger.info(f"  {i}. {candidate['title']} ({candidate['year']}) - {candidate['rating']}/10 - {source_label}{collection}")
+            if len(filtered) > 10:
+                logger.info(f"  ... and {len(filtered) - 10} more")
+            # OPTIONAL: Show how many were skipped too
+            if skipped_count > 0:
+                logger.info(f"  ({skipped_count} movies skipped due to filters)") 
+        else:
+            logger.info(f"No similar movies found for '{source_title}' after filtering ({skipped_count} skipped)")
         
         logger.info(f"Found {len(filtered)} similar movies for '{source_title}' after filtering")
         return filtered
@@ -1034,7 +1100,7 @@ async def main():
         to_add = new_candidates[:config.max_similar_per_source]
         
         if to_add:
-            logger.info(f"✓ '{source_title} ({source_year})' → Found {len(to_add)} similar movies to add")
+            logger.info(f"Found {len(to_add)} similar movies to add from source: {source_title} ({source_year})")
             
             # Add each candidate
             added_for_source = 0
@@ -1042,7 +1108,8 @@ async def main():
                 if total_added >= config.max_additions_per_run:
                     break
                 
-                logger.info(f"  Adding: {candidate['title']} ({candidate['year']}) - {candidate['source'].upper()}")
+                source_label = "TMDB" if candidate["source"] == "tmdb" else "LLM"
+                logger.info(f"  Adding: {candidate['title']} ({candidate['year']}) - {source_label}")
                 if candidate.get("rationale"):
                     logger.info(f"    Reason: {candidate['rationale']}")
                 
@@ -1143,6 +1210,24 @@ async def main():
         if config.only_solo_movies:
             logger.info(f"  Movies skipped (in collections): {engine.skipped_collection_count}")
         logger.info(f"  Max additions per run: {config.max_additions_per_run}")
+        
+        # Show what was added and where it came from
+        if added_movies:
+            logger.info("")
+            logger.info("Added Movies:")
+            for tmdb_id, info in added_movies.items():
+                movie_title = info.get("title", "Unknown")
+                source_title = info.get("source_title", "Unknown")
+                # Try to get year from processed_sources
+                source_key = str(info.get("source_tmdb_id", ""))
+                source_info = processed_sources.get(source_key, {})
+                # If we have the source info with title, use it (might include year in title already)
+                if source_info.get("title"):
+                    source_display = source_info.get("title")
+                else:
+                    source_display = source_title
+                logger.info(f"  {movie_title} -- from {source_display}")
+    
     logger.info("=" * 50)
 
 # ============================================================================
